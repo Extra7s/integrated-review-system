@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h2>Admin Dashboard</h2>
+    <p>Manage datasets and retrain the machine learning models.</p>
+
+    <div class="row" style="display: flex; gap: 20px;">
+        <div class="col" style="flex: 1;">
+            <h3>1. Upload Dataset</h3>
+            <div class="form-group">
+                <input type="file" id="csvFile" accept=".csv">
+            </div>
+            <button id="uploadBtn" class="btn btn-primary">Upload CSV</button>
+            <p id="uploadStatus"></p>
+        </div>
+
+        <div class="col" style="flex: 1;">
+            <h3>2. Train Models</h3>
+            <p>Training will regenerate TF-IDF features and retrain all 3 algorithms.</p>
+            <button id="trainBtn" class="btn btn-primary">Start Training</button>
+            <div class="loading" id="trainLoader">
+                <div class="spinner"></div>
+                <p>Training in progress. This may take a while...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card" id="metricsSection" style="display: none;">
+    <h2>Model Performance</h2>
+
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <h4>Logistic Regression</h4>
+            <p class="metric-value" id="acc_lr">--%</p>
+            <p>Accuracy</p>
+        </div>
+        <div class="metric-card">
+            <h4>Linear SVM</h4>
+            <p class="metric-value" id="acc_svm">--%</p>
+            <p>Accuracy</p>
+        </div>
+        <div class="metric-card">
+            <h4>Decision Tree</h4>
+            <p class="metric-value" id="acc_dt">--%</p>
+            <p>Accuracy</p>
+        </div>
+        <div class="metric-card">
+            <h4>Ensemble</h4>
+            <p class="metric-value" id="acc_ens">--%</p>
+            <p>Accuracy</p>
+        </div>
+    </div>
+
+    <h3>Detailed Metrics</h3>
+    <div style="overflow-x: auto;">
+        <table id="detailedMetricsTable">
+            <thead>
+                <tr>
+                    <th>Algorithm</th>
+                    <th>Accuracy</th>
+                    <th>Confusion Matrix (TN, FP, FN, TP)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Populated by JS -->
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

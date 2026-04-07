@@ -1,0 +1,51 @@
+/* Extracted inline styles for admin pages */
+.empty-placeholder {
+    text-align: center;
+    padding: 30px;
+    color: #999;
+}
+
+.appeal-card {
+    margin-bottom: 12px;
+    padding: 12px;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    background: #fff;
+}
+
+.appeal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    margin-bottom: 10px;
+}
+
+.appeal-user {
+    font-weight: 600;
+    color: #333;
+}
+
+.appeal-artwork {
+    font-size: 12px;
+    color: #999;
+}
+
+.appeal-section { margin: 10px 0; }
+
+.product-card {
+    margin-bottom: 12px;
+    padding: 12px;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    background: #fff;
+}
+
+.product-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px; }
+
+.risk-badge { padding: 6px 8px; border-radius: 4px; font-weight: 600; }
+
+.risk-breakdown { margin-top: 8px; }
+.risk-factor { display: flex; justify-content: space-between; font-size: 12px; color: #666; }
+
+/* Reusable small utility */
+.muted { color: #999; font-size: 12px; }
