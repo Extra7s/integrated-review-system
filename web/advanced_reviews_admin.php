@@ -193,6 +193,34 @@ $offset = ($page - 1) * $limit;
             color: white;
         }
 
+        .status-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-approved {
+            background: #4caf50;
+            color: white;
+        }
+
+        .status-flagged {
+            background: #ff9800;
+            color: white;
+        }
+
+        .status-rejected {
+            background: #d32f2f;
+            color: white;
+        }
+
+        .status-pending {
+            background: #9e9e9e;
+            color: white;
+        }
+
         .risk-breakdown {
             margin-top: 10px;
             padding: 10px;
@@ -509,10 +537,6 @@ $offset = ($page - 1) * $limit;
             <ul class="sidebar-menu">
                 <li><a href="admin/dashboard.php" class="nav-link"><i class="fas fa-chart-line"></i> Dashboard</a></li>
                 <li><a href="advanced_reviews_admin.php?tab=reviews" class="nav-link active"><i class="fas fa-comments"></i> All Reviews</a></li>
-                <li><a href="advanced_reviews_admin.php?tab=flagged" class="nav-link"><i class="fas fa-flag"></i> Flagged</a></li>
-                <li><a href="advanced_reviews_admin.php?tab=appeals" class="nav-link"><i class="fas fa-bell"></i> Appeals</a></li>
-                <li><a href="advanced_reviews_admin.php?tab=products" class="nav-link"><i class="fas fa-box"></i> At-Risk Products</a></li>
-                <li><a href="advanced_reviews_admin.php?tab=duplicates" class="nav-link"><i class="fas fa-clone"></i> Duplicates</a></li>
                 <li><a href="logout.php" class="nav-link"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
             </ul>
         </div>
@@ -527,10 +551,6 @@ $offset = ($page - 1) * $limit;
 
             <div class="tabs">
                 <button class="tab-btn active" data-tab="reviews">Reviews</button>
-                <button class="tab-btn" data-tab="flagged">Flagged</button>
-                <button class="tab-btn" data-tab="appeals">Appeals</button>
-                <button class="tab-btn" data-tab="products">At-Risk Products</button>
-                <button class="tab-btn" data-tab="duplicates">Near-Duplicates</button>
                 <button class="tab-btn" data-tab="ml-training">ML Training</button>
             </div>
 
@@ -585,28 +605,27 @@ $offset = ($page - 1) * $limit;
                 <div class="pagination" id="pagination"></div>
             </div>
 
-            <!-- Flagged Reviews Tab -->
-            <div id="flagged-tab" class="tab-content">
-                <div class="reviews-grid" id="flagged-container"></div>
-            </div>
-
-            <!-- Appeals Tab -->
-            <div id="appeals-tab" class="tab-content">
-                <div id="appeals-container"></div>
-            </div>
-
-            <!-- At-Risk Products Tab -->
-            <div id="products-tab" class="tab-content">
-                <div id="products-container"></div>
-            </div>
-
-            <!-- Duplicates Tab -->
-            <div id="duplicates-tab" class="tab-content">
-                <div id="duplicates-container"></div>
-            </div>
-
             <!-- ML Training Tab -->
             <div id="ml-training-tab" class="tab-content">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Submitted Reviews</div>
+                        <div class="stat-value" id="ml-total-reviews">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Training Samples</div>
+                        <div class="stat-value" id="ml-training-samples">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Approved</div>
+                        <div class="stat-value" id="ml-approved-reviews" style="color: #2e7d32;">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Flagged / Rejected</div>
+                        <div class="stat-value" id="ml-flagged-reviews" style="color: #d32f2f;">0</div>
+                    </div>
+                </div>
+
                 <div class="stat-card" style="margin-bottom: 15px;">
                     <div class="stat-label">ML API Status</div>
                     <div style="display:flex; gap:10px; align-items:center; margin-top:10px;">
@@ -620,10 +639,11 @@ $offset = ($page - 1) * $limit;
                     <div style="display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap:wrap;">
                         <input type="file" id="dataset-file" accept=".csv" style="padding:10px; border:1px solid #ddd; border-radius:4px; background:white;">
                         <button class="btn btn-profile" onclick="uploadDataset()">Upload</button>
+                        <button class="btn btn-profile" onclick="uploadGeneratedDataset()">Use Current Reviews</button>
                         <div id="upload-status-text" style="font-size:12px; color:#666;"></div>
                     </div>
                     <div style="font-size:12px; color:#999; margin-top:10px;">
-                        Dataset must be a CSV with the columns your ML service expects (commonly: <strong>text</strong>, <strong>label</strong>).
+                        You can upload your own CSV, or generate one automatically from currently reviewed submissions.
                     </div>
                 </div>
 
@@ -645,31 +665,6 @@ $offset = ($page - 1) * $limit;
             <button class="modal-close" onclick="closeModal('profile-modal')">&times;</button>
             <div class="modal-header">Reviewer Profile</div>
             <div id="profile-content"></div>
-        </div>
-    </div>
-
-    <!-- Appeal Response Modal -->
-    <div id="appeal-modal" class="modal">
-        <div class="modal-content">
-            <button class="modal-close" onclick="closeModal('appeal-modal')">&times;</button>
-            <div class="modal-header">Respond to Appeal</div>
-            <div class="form-group">
-                <label>Review Issue</label>
-                <textarea id="appeal-issue" readonly></textarea>
-            </div>
-            <div class="form-group">
-                <label>Your Response</label>
-                <textarea id="appeal-response" placeholder="Explain your decision..."></textarea>
-            </div>
-            <div class="form-group">
-                <label>Decision</label>
-                <select id="appeal-decision">
-                    <option value="">Choose...</option>
-                    <option value="approved">Approve Appeal (reinstate review)</option>
-                    <option value="rejected">Reject Appeal (keep flagged)</option>
-                </select>
-            </div>
-            <button class="btn btn-approve" onclick="submitAppealResponse()" style="width: 100%; padding: 12px;">Submit Response</button>
         </div>
     </div>
 
@@ -712,28 +707,31 @@ $offset = ($page - 1) * $limit;
                 case 'reviews':
                     loadReviews();
                     break;
-                case 'flagged':
-                    loadFlaggedReviews();
-                    break;
-                case 'appeals':
-                    loadAppeals();
-                    break;
-                case 'products':
-                    loadFlaggedProducts();
-                    break;
-                case 'duplicates':
-                    loadDuplicates();
-                    break;
                 case 'ml-training':
-                    // No auto-fetch. Buttons handle status/upload/train.
+                    loadMlTrainingSummary();
                     break;
+            }
+        }
+
+        async function fetchJson(url, options = {}) {
+            const response = await fetch(url, options);
+            const text = await response.text();
+            try {
+                return JSON.parse(text);
+            } catch (error) {
+                const preview = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+                throw new Error(preview || 'Server returned invalid JSON');
             }
         }
 
         function loadReviews(page = 1) {
             const offset = (page - 1) * 20;
-            fetch(`actions/admin_reviews.php?action=getReviews&offset=${offset}&limit=20`)
-                .then(r => r.json())
+            const riskFilter = document.getElementById('risk-filter').value;
+            const statusFilter = document.getElementById('status-filter').value;
+            let url = `actions/admin_reviews.php?action=getReviews&offset=${offset}&limit=20`;
+            if (riskFilter) url += `&risk_filter=${riskFilter}`;
+            if (statusFilter) url += `&status_filter=${statusFilter}`;
+            fetchJson(url)
                 .then(data => {
                     if (data.success) {
                         renderReviews(data.reviews);
@@ -779,7 +777,10 @@ $offset = ($page - 1) * $limit;
                             <div class="reviewer-name"><a href="javascript:viewReviewerProfile(${review.user_id})" style="color: #333; text-decoration: none; cursor: pointer;">${escapeHtml(review.user_name)}</a></div>
                             <div class="review-meta">${escapeHtml(review.artwork_title)} • ${new Date(review.created_at).toLocaleDateString()}</div>
                         </div>
-                        <span class="risk-badge risk-${riskLevel}">${review.risk_score}/100</span>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <span class="risk-badge risk-${riskLevel}">${review.risk_score}/100</span>
+                            <span class="status-badge status-${review.status}">${review.status.toUpperCase()}</span>
+                        </div>
                     </div>
                     <div style="color: #ff9800; margin-bottom: 10px;">${'★'.repeat(review.rating)}${'☆'.repeat(5-review.rating)}</div>
                     <div class="review-comment">${escapeHtml(review.comment.substring(0, 200))}...</div>
@@ -817,140 +818,14 @@ $offset = ($page - 1) * $limit;
             }
         }
 
-        function loadFlaggedReviews() {
-            fetch('actions/admin_reviews.php?action=getFlaggedReviews')
-                .then(r => r.json())
-                .then(data => {
-                    if (data.success) {
-                        renderReviews(data.reviews, 'flagged-container', false);
-                    }
-                })
-                .catch(err => showAlert('Error: ' + err.message, 'error'));
-        }
-
-        function loadAppeals() {
-            fetch('actions/admin_reviews.php?action=getAppeals')
-                .then(r => r.json())
-                .then(data => {
-                    if (data.success) {
-                        const container = document.getElementById('appeals-container');
-                        container.innerHTML = '';
-                        
-                        if (data.appeals.length === 0) {
-                            container.innerHTML = '<p style="text-align: center; padding: 30px;">No pending appeals</p>';
-                            return;
-                        }
-                        
-                        data.appeals.forEach(appeal => {
-                            const card = document.createElement('div');
-                            card.className = 'appeal-card';
-                            card.innerHTML = `
-                                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
-                                    <div>
-                                        <div style="font-weight: 600; color: #333;">${escapeHtml(appeal.user_name)}</div>
-                                        <div style="font-size: 12px; color: #999;">${escapeHtml(appeal.artwork_title)}</div>
-                                    </div>
-                                    <span class="appeal-status">${appeal.appeal_status.toUpperCase()}</span>
-                                </div>
-                                <div style="margin: 10px 0;">
-                                    <strong>Review:</strong> "${escapeHtml(appeal.review_comment.substring(0, 100))}..."
-                                </div>
-                                <div style="margin: 10px 0;">
-                                    <strong>Appeal Reason:</strong> <br>${escapeHtml(appeal.appeal_reason)}
-                                </div>
-                                <button class="btn btn-profile" onclick="respondToAppeal(${appeal.id}, '${escapeHtml(appeal.appeal_reason).replace(/'/g, "\\'")}')">Review Appeal</button>
-                            `;
-                            container.appendChild(card);
-                        });
-                    }
-                })
-                .catch(err => showAlert('Error: ' + err.message, 'error'));
-        }
-
-        function loadFlaggedProducts() {
-            fetch('actions/admin_reviews.php?action=getFlaggedProducts')
-                .then(r => r.json())
-                .then(data => {
-                    if (data.success) {
-                        const container = document.getElementById('products-container');
-                        container.innerHTML = '';
-                        
-                        data.products.forEach(product => {
-                            const card = document.createElement('div');
-                            card.className = 'product-card';
-                            card.innerHTML = `
-                                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
-                                    <div>
-                                        <div style="font-weight: 600; font-size: 16px; color: #333;">${escapeHtml(product.title)}</div>
-                                        <div style="font-size: 12px; color: #999;">Price: $${parseFloat(product.price).toFixed(2)}</div>
-                                    </div>
-                                    <span class="risk-badge risk-high">${product.flagged_reviews} Flagged</span>
-                                </div>
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px;">
-                                    <div>
-                                        <div style="font-size: 12px; color: #999;">Avg Risk Score</div>
-                                        <div style="font-size: 18px; font-weight: 700; color: #ff9800;">${Math.round(product.avg_risk_score)}/100</div>
-                                    </div>
-                                    <div>
-                                        <div style="font-size: 12px; color: #999;">Total Reviews</div>
-                                        <div style="font-size: 18px; font-weight: 700;">${product.review_count}</div>
-                                    </div>
-                                </div>
-                                ${product.burst_data ? `<div style="margin-top: 10px; padding: 10px; background: #ffebee; border-radius: 4px; font-size: 12px;">⚠️ ${product.burst_data.burst_count} suspicious review bursts detected</div>` : ''}
-                            `;
-                            container.appendChild(card);
-                        });
-                    }
-                })
-                .catch(err => showAlert('Error: ' + err.message, 'error'));
-        }
-
-        function loadDuplicates() {
-            fetch('actions/admin_reviews.php?action=getDuplicates')
-                .then(r => r.json())
-                .then(data => {
-                    if (data.success) {
-                        const container = document.getElementById('duplicates-container');
-                        container.innerHTML = '';
-                        
-                        data.similarities.forEach(sim => {
-                            const card = document.createElement('div');
-                            card.className = 'review-card medium-risk';
-                            card.innerHTML = `
-                                <div style="margin-bottom: 15px;">
-                                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                                        <div style="font-weight: 600;">Review Pair Match</div>
-                                        <span class="risk-badge risk-medium">${(sim.similarity_score * 100).toFixed(0)}% Similar</span>
-                                    </div>
-                                    <div style="font-size: 12px; color: #999; margin-bottom: 10px;">Detected: ${new Date(sim.detected_at).toLocaleDateString()}</div>
-                                </div>
-                                <div style="background: #fff3e0; padding: 10px; border-radius: 4px; margin-bottom: 10px;">
-                                    <div><strong>Review 1:</strong> "${escapeHtml(sim.comment_1.substring(0, 100))}..."</div>
-                                    <div style="margin-top: 10px;"><strong>Review 2:</strong> "${escapeHtml(sim.comment_2.substring(0, 100))}..."</div>
-                                </div>
-                                <div class="review-actions">
-                                    <button class="btn btn-reject" onclick="updateReviewStatus(${sim.review_id_1}, 'rejected')">Reject Review 1</button>
-                                    <button class="btn btn-reject" onclick="updateReviewStatus(${sim.review_id_2}, 'rejected')">Reject Review 2</button>
-                                </div>
-                            `;
-                            container.appendChild(card);
-                        });
-                        
-                        if (data.similarities.length === 0) {
-                            container.innerHTML = '<p style="text-align: center; padding: 30px; color: #999;">No duplicate reviews detected</p>';
-                        }
-                    }
-                })
-                .catch(err => showAlert('Error: ' + err.message, 'error'));
-        }
-
         function updateReviewStatus(reviewId, status) {
             fetch('actions/admin_reviews.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: `action=updateReviewStatus&review_id=${reviewId}&status=${status}`
             })
-                .then(r => r.json())
+                .then(r => r.text())
+                .then(text => JSON.parse(text))
                 .then(data => {
                     if (data.success) {
                         showAlert(`Review ${status} successfully`, 'success');
@@ -963,8 +838,7 @@ $offset = ($page - 1) * $limit;
         }
 
         function viewReviewerProfile(userId) {
-            fetch(`actions/admin_reviews.php?action=getReviewerProfile&user_id=${userId}`)
-                .then(r => r.json())
+            fetchJson(`actions/admin_reviews.php?action=getReviewerProfile&user_id=${userId}`)
                 .then(data => {
                     if (data.success) {
                         renderProoflerProfile(data);
@@ -1030,43 +904,11 @@ $offset = ($page - 1) * $limit;
                         ${reviewsHtml || '<p style="padding: 20px; text-align: center; color: #999;">No reviews</p>'}
                     </div>
                 </div>
+                
+                <div style="text-align: center; margin-top: 20px;">
+                    <button class="btn btn-profile" onclick="closeModal('profile-modal')">Close</button>
+                </div>
             `;
-        }
-
-        function respondToAppeal(appealId, reason) {
-            document.getElementById('appeal-issue').value = reason;
-            document.getElementById('appeal-response').value = '';
-            document.getElementById('appeal-decision').value = '';
-            document.getElementById('appeal-modal').dataset.appealId = appealId;
-            document.getElementById('appeal-modal').classList.add('active');
-        }
-
-        function submitAppealResponse() {
-            const appealId = document.getElementById('appeal-modal').dataset.appealId;
-            const response = document.getElementById('appeal-response').value;
-            const decision = document.getElementById('appeal-decision').value;
-            
-            if (!response || !decision) {
-                showAlert('Please fill in all fields', 'error');
-                return;
-            }
-            
-            fetch('actions/admin_reviews.php', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `action=respondToAppeal&appeal_id=${appealId}&response=${encodeURIComponent(response)}&decision=${decision}`
-            })
-                .then(r => r.json())
-                .then(data => {
-                    if (data.success) {
-                        showAlert('Appeal response submitted', 'success');
-                        closeModal('appeal-modal');
-                        loadAppeals();
-                    } else {
-                        showAlert('Error: ' + (data.message || 'Unknown error'), 'error');
-                    }
-                })
-                .catch(err => showAlert('Error: ' + err.message, 'error'));
         }
 
         function setupSelectAll() {
@@ -1100,7 +942,8 @@ $offset = ($page - 1) * $limit;
                     bulk_action: action
                 })
             })
-                .then(r => r.json())
+                .then(r => r.text())
+                .then(text => JSON.parse(text))
                 .then(data => {
                     if (data.success) {
                         showAlert(data.message, 'success');
@@ -1114,7 +957,6 @@ $offset = ($page - 1) * $limit;
         }
 
         function filterReviews() {
-            // This can be expanded with more filtering logic
             loadReviews(1);
         }
 
@@ -1137,12 +979,27 @@ $offset = ($page - 1) * $limit;
             return div.innerHTML;
         }
 
+        function loadMlTrainingSummary() {
+            fetchJson('actions/ml_training.php?action=summary')
+                .then(data => {
+                    if (!data.success) {
+                        throw new Error(data.message || 'Failed to load ML training summary');
+                    }
+
+                    const summary = data.summary || {};
+                    document.getElementById('ml-total-reviews').textContent = summary.total_reviews || 0;
+                    document.getElementById('ml-training-samples').textContent = summary.training_samples || 0;
+                    document.getElementById('ml-approved-reviews').textContent = summary.approved_reviews || 0;
+                    document.getElementById('ml-flagged-reviews').textContent = (summary.flagged_reviews || 0) + (summary.rejected_reviews || 0);
+                })
+                .catch(err => showAlert('Error loading ML training summary: ' + err.message, 'error'));
+        }
+
         async function checkMlStatus() {
             const el = document.getElementById('ml-status-text');
             el.textContent = 'Checking...';
             try {
-                const r = await fetch('actions/ml_training.php?action=status');
-                const data = await r.json();
+                const data = await fetchJson('actions/ml_training.php?action=status');
                 if (data.success) {
                     el.textContent = 'Online';
                     el.style.color = '#2e7d32';
@@ -1169,8 +1026,7 @@ $offset = ($page - 1) * $limit;
                 const fd = new FormData();
                 fd.append('action', 'uploadDataset');
                 fd.append('dataset', file);
-                const r = await fetch('actions/ml_training.php', { method: 'POST', body: fd });
-                const data = await r.json();
+                const data = await fetchJson('actions/ml_training.php', { method: 'POST', body: fd });
                 if (data.success) {
                     statusEl.textContent = 'Uploaded successfully';
                     showAlert('Dataset uploaded to ML service', 'success');
@@ -1185,6 +1041,27 @@ $offset = ($page - 1) * $limit;
             }
         }
 
+        async function uploadGeneratedDataset() {
+            const statusEl = document.getElementById('upload-status-text');
+            statusEl.textContent = 'Generating dataset from current reviews...';
+            try {
+                const fd = new FormData();
+                fd.append('action', 'uploadGeneratedDataset');
+                const data = await fetchJson('actions/ml_training.php', { method: 'POST', body: fd });
+                if (data.success) {
+                    statusEl.textContent = `Generated and uploaded ${data.record_count} reviews`;
+                    showAlert('Current reviews uploaded as ML dataset', 'success');
+                    loadMlTrainingSummary();
+                } else {
+                    statusEl.textContent = 'Generation failed';
+                    showAlert(data.message || 'Could not generate dataset', 'error');
+                }
+            } catch (e) {
+                statusEl.textContent = 'Generation failed';
+                showAlert('Could not generate dataset: ' + e.message, 'error');
+            }
+        }
+
         async function trainModel() {
             const statusEl = document.getElementById('train-status-text');
             const outEl = document.getElementById('train-output');
@@ -1194,11 +1071,11 @@ $offset = ($page - 1) * $limit;
             try {
                 const fd = new FormData();
                 fd.append('action', 'train');
-                const r = await fetch('actions/ml_training.php', { method: 'POST', body: fd });
-                const data = await r.json();
+                const data = await fetchJson('actions/ml_training.php', { method: 'POST', body: fd });
                 if (data.success) {
                     statusEl.textContent = 'Training complete';
                     showAlert('Training complete', 'success');
+                    loadMlTrainingSummary();
                 } else {
                     statusEl.textContent = 'Training failed';
                     showAlert(data.message || 'Training failed', 'error');

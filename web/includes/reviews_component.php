@@ -770,15 +770,36 @@ document.addEventListener('DOMContentLoaded', function() {
                         container.appendChild(createReviewElement(review));
                     });
                     setupPagination(data.pagination);
-                } else {
+                } else if (data.success && data.stats) {
+                    // No reviews but we have stats
                     container.innerHTML = '<p style="text-align: center; padding: 30px; color: #999;">No reviews yet. Be the first to review!</p>';
                     updateStats(data.stats);
+                } else {
+                    // Error or no stats - show default empty stats
+                    container.innerHTML = '<p style="text-align: center; padding: 30px; color: #999;">No reviews yet. Be the first to review!</p>';
+                    updateStats({
+                        average_rating: 0,
+                        total_reviews: 0,
+                        authentic_reviews: 0,
+                        suspicious_reviews: 0,
+                        verified_purchase_reviews: 0,
+                        average_authenticity: 0
+                    });
                 }
             })
             .catch(err => {
                 spinner.classList.add('hidden');
                 container.innerHTML = '<p style="color: #d32f2f; padding: 20px;">Error loading reviews</p>';
                 console.error(err);
+                // Show default empty stats on error
+                updateStats({
+                    average_rating: 0,
+                    total_reviews: 0,
+                    authentic_reviews: 0,
+                    suspicious_reviews: 0,
+                    verified_purchase_reviews: 0,
+                    average_authenticity: 0
+                });
             });
     }
 
@@ -838,15 +859,24 @@ document.addEventListener('DOMContentLoaded', function() {
         let badges = '';
         
         // Verified Purchase Badge
-        if (review.verified_purchase) {
-            badges += `<span class="review-badge verified-purchase">✓ Verified Purchase</span>`;
+        if (review.verified_purchase && review.status !== 'flagged') {
+            badges += `<span class="review-badge verified-purchase"><i class="fas fa-check-circle"></i> Verified Purchase</span>`;
         }
         
         // Authenticity Badge
         if (review.is_authentic) {
-            badges += `<span class="review-badge authentic">✓ Verified Review</span>`;
+            badges += `<span class="review-badge authentic"><i class="fas fa-check-circle"></i> Verified Review</span>`;
         } else if (review.is_fake) {
-            badges += `<span class="review-badge fake">⚠️ Suspicious Review</span>`;
+            badges += `<span class="review-badge fake"><i class="fas fa-exclamation-triangle"></i> Suspicious Review</span>`;
+        }
+
+        // Status Badge
+        if (review.status === 'approved') {
+            badges += `<span class="review-badge verified"><i class="fas fa-check-circle"></i> Approved</span>`;
+        } else if (review.status === 'flagged') {
+            badges += `<span class="review-badge fake"><i class="fas fa-flag"></i> Flagged</span>`;
+        } else if (review.status === 'pending') {
+            badges += `<span class="review-badge"><i class="fas fa-clock"></i> Pending</span>`;
         }
 
         const stars = generateStars(review.rating);
@@ -971,7 +1001,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 method: 'POST',
                 body: formData
             })
-                .then(r => r.json().then(data => ({ status: r.status, ok: r.ok, data: data })))
+                .then(async r => {
+                    const text = await r.text();
+                    let data;
+                    try {
+                        data = JSON.parse(text);
+                    } catch (jsonError) {
+                        throw new Error('Invalid JSON response from server: ' + text);
+                    }
+                    return { status: r.status, ok: r.ok, data };
+                })
                 .then(response => {
                     if (response.data.success) {
                         alert('Review submitted! Thank you for your feedback.');
@@ -1031,7 +1070,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             })
             .catch(err => {
-                console.error('Error checking review eligibility:', err);
+                console.warn('Could not check review eligibility, showing form anyway (server enforces purchase verification):', err);
+                // Show the form — server-side validation will still block non-purchasers
                 form.classList.remove('hidden');
             });
     }

@@ -396,15 +396,30 @@ class ReviewAnalyzer {
      */
     public function updateReviewRiskScore($review_id, $risk_data) {
         $risk_factors_json = json_encode($risk_data['risk_factors']);
-        $status = $risk_data['should_flag'] ? 'flagged' : 'approved';
+
+        // Only update status if the review should be flagged for suspicious activity
+        // Leave legitimate reviews as 'pending' for manual admin approval
+        $status = $risk_data['should_flag'] ? 'flagged' : null;
         $flagged_reason = $risk_data['should_flag'] ? $this->generateFlagReason($risk_data['risk_factors']) : NULL;
 
-        $stmt = $this->conn->prepare("
-            UPDATE reviews 
-            SET risk_score = ?, risk_factors = ?, status = ?, flagged_reason = ?
-            WHERE id = ?
-        ");
-        $stmt->bind_param("isssi", $risk_data['risk_score'], $risk_factors_json, $status, $flagged_reason, $review_id);
+        if ($status === 'flagged') {
+            // Only update status and flagged_reason if flagging the review
+            $stmt = $this->conn->prepare("
+                UPDATE reviews
+                SET risk_score = ?, risk_factors = ?, status = ?, flagged_reason = ?
+                WHERE id = ?
+            ");
+            $stmt->bind_param("isssi", $risk_data['risk_score'], $risk_factors_json, $status, $flagged_reason, $review_id);
+        } else {
+            // For non-flagged reviews, only update risk score and factors, keep status as 'pending'
+            $stmt = $this->conn->prepare("
+                UPDATE reviews
+                SET risk_score = ?, risk_factors = ?
+                WHERE id = ?
+            ");
+            $stmt->bind_param("isi", $risk_data['risk_score'], $risk_factors_json, $review_id);
+        }
+
         return $stmt->execute();
     }
 

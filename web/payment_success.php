@@ -24,8 +24,15 @@ if ($order) {
         error_log("=== PAYMENT SUCCESS PAGE: Order found, order_id=$order_id, payment_status={$order['payment_status']} ===");
         
         if ($order['payment_status'] == 'paid') {
-            // Order already paid - ensure tokens exist
-            error_log("Order already marked as paid, checking if tokens exist...");
+            // Order already paid - ensure status is 'completed' and tokens exist
+            error_log("Order already marked as paid, ensuring status=completed and tokens exist...");
+            
+            // Make sure status is also set to completed (fix for older orders)
+            if ($order['status'] !== 'completed') {
+                $conn->query("UPDATE orders SET status = 'completed' WHERE id = $order_id");
+                error_log("Updated order $order_id status to 'completed'");
+            }
+            
             try {
                 $tokenService = new ReviewTokenService($conn);
                 // Check if tokens already exist for this order
@@ -59,11 +66,11 @@ if ($order) {
             if ($verification['success'] && $verification['status'] === 'Completed') {
                 error_log("Khalti verification SUCCESSFUL for order $order_id");
                 
-                // Update order status to paid
-                $stmt = $conn->prepare("UPDATE orders SET payment_status = 'paid', khalti_token = ? WHERE id = ?");
+                // Update order status to paid and completed
+                $stmt = $conn->prepare("UPDATE orders SET payment_status = 'paid', status = 'completed', khalti_token = ? WHERE id = ?");
                 $stmt->bind_param("si", $pidx, $order_id);
                 $stmt->execute();
-                error_log("Order $order_id marked as paid in database");
+                error_log("Order $order_id marked as paid and completed in database");
 
                 // Generate review tokens for this order
                 try {

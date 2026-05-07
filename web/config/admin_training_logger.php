@@ -39,23 +39,19 @@ class AdminTrainingLogger {
             // Convert ML prediction to label (1 = fake, 0 = genuine)
             $ml_label = $review['is_fake'] ? 1 : 0;
 
-            // Convert admin decision to label
-            $correct_label = in_array($admin_decision, ['rejected', 'flagged']) ? 1 : 0;
-
             // Insert training log
             $stmt = $this->conn->prepare("
                 INSERT INTO admin_training_log 
-                (review_id, admin_id, admin_decision, ml_label, correct_label, ml_confidence, reason, created_at) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                (review_id, admin_id, original_ml_prediction, original_ml_confidence, admin_decision, reason, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt->bind_param(
-                "iissids",
+                "iiidss",
                 $review_id,
                 $admin_id,
-                $admin_decision,
                 $ml_label,
-                $correct_label,
                 $review['fake_confidence'],
+                $admin_decision,
                 $reason
             );
 
@@ -90,25 +86,24 @@ class AdminTrainingLogger {
                     r.id,
                     r.comment,
                     r.rating,
-                    atl.ml_label,
-                    atl.correct_label,
-                    atl.ml_confidence,
+                    atl.original_ml_prediction as ml_label,
+                    CASE WHEN atl.admin_decision IN ('rejected', 'flagged') THEN 1 ELSE 0 END as correct_label,
+                    atl.original_ml_confidence as ml_confidence,
                     DATEDIFF(NOW(), u.created_at) as account_age_days,
                     COALESCE(urp.risk_score, 0) as risk_score,
-                    COALESCE(SUM(CASE WHEN hv.is_helpful = 1 THEN 1 ELSE 0 END), 0) as helpful_votes,
-                    COALESCE(SUM(CASE WHEN hv.is_helpful = 0 THEN 1 ELSE 0 END), 0) as unhelpful_votes
+                    COALESCE(r.helpful_count, 0) as helpful_votes,
+                    COALESCE(r.unhelpful_count, 0) as unhelpful_votes
                 FROM admin_training_log atl
                 JOIN reviews r ON atl.review_id = r.id
                 JOIN users u ON r.user_id = u.id
                 LEFT JOIN user_risk_profiles urp ON u.id = urp.user_id
-                LEFT JOIN helpful_votes hv ON r.id = hv.review_id
                 ";
 
             if ($since_date) {
                 $query .= " WHERE atl.created_at >= ? ";
             }
 
-            $query .= " GROUP BY r.id ORDER BY atl.created_at DESC LIMIT ? ";
+            $query .= " ORDER BY atl.created_at DESC LIMIT ? ";
 
             $stmt = $this->conn->prepare($query);
 
@@ -212,6 +207,86 @@ class AdminTrainingLogger {
     }
 
     /**
+     * Export a minimal dataset that matches the Flask ML API schema.
+     * The CSV contains exactly: text,label
+     */
+    public function exportMlApiDatasetAsCSV($output_file) {
+        try {
+            $query = "
+                SELECT
+                    comment as text,
+                    CASE
+                        WHEN status IN ('flagged', 'rejected') THEN 1
+                        WHEN status = 'approved' THEN 0
+                        ELSE NULL
+                    END as label
+                FROM reviews
+                WHERE comment IS NOT NULL
+                  AND TRIM(comment) <> ''
+                  AND status IN ('approved', 'flagged', 'rejected')
+                ORDER BY created_at DESC
+            ";
+
+            $result = $this->conn->query($query);
+            if (!$result) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to read reviews for dataset generation'
+                ];
+            }
+
+            $rows = [];
+            while ($row = $result->fetch_assoc()) {
+                if ($row['label'] === null) {
+                    continue;
+                }
+                $rows[] = $row;
+            }
+
+            if (empty($rows)) {
+                return [
+                    'success' => false,
+                    'error' => 'No labeled reviews available for training'
+                ];
+            }
+
+            $dir = dirname($output_file);
+            if (!is_dir($dir) && !mkdir($dir, 0777, true) && !is_dir($dir)) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to create dataset directory'
+                ];
+            }
+
+            $fp = fopen($output_file, 'w');
+            if ($fp === false) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to open dataset file for writing'
+                ];
+            }
+
+            fputcsv($fp, ['text', 'label']);
+            foreach ($rows as $row) {
+                fputcsv($fp, [$row['text'], $row['label']]);
+            }
+            fclose($fp);
+
+            return [
+                'success' => true,
+                'file_path' => $output_file,
+                'record_count' => count($rows)
+            ];
+        } catch (Exception $e) {
+            error_log("Error in exportMlApiDatasetAsCSV: " . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => 'Error exporting ML API dataset: ' . $e->getMessage()
+            ];
+        }
+    }
+
+    /**
      * Calculate model performance metrics
      * Compares ML predictions to admin decisions
      */
@@ -220,12 +295,12 @@ class AdminTrainingLogger {
             $query = "
                 SELECT 
                     COUNT(*) as total_decisions,
-                    SUM(CASE WHEN ml_label = correct_label THEN 1 ELSE 0 END) as correct_predictions,
-                    SUM(CASE WHEN ml_label = 1 AND correct_label = 1 THEN 1 ELSE 0 END) as true_positives,
-                    SUM(CASE WHEN ml_label = 1 AND correct_label = 0 THEN 1 ELSE 0 END) as false_positives,
-                    SUM(CASE WHEN ml_label = 0 AND correct_label = 1 THEN 1 ELSE 0 END) as false_negatives,
-                    SUM(CASE WHEN ml_label = 0 AND correct_label = 0 THEN 1 ELSE 0 END) as true_negatives,
-                    AVG(ml_confidence) as avg_confidence
+                    SUM(CASE WHEN original_ml_prediction = CASE WHEN admin_decision IN ('rejected', 'flagged') THEN 1 ELSE 0 END THEN 1 ELSE 0 END) as correct_predictions,
+                    SUM(CASE WHEN original_ml_prediction = 1 AND admin_decision IN ('rejected', 'flagged') THEN 1 ELSE 0 END) as true_positives,
+                    SUM(CASE WHEN original_ml_prediction = 1 AND admin_decision = 'approved' THEN 1 ELSE 0 END) as false_positives,
+                    SUM(CASE WHEN original_ml_prediction = 0 AND admin_decision IN ('rejected', 'flagged') THEN 1 ELSE 0 END) as false_negatives,
+                    SUM(CASE WHEN original_ml_prediction = 0 AND admin_decision = 'approved' THEN 1 ELSE 0 END) as true_negatives,
+                    AVG(original_ml_confidence) as avg_confidence
                 FROM admin_training_log
                 ";
 

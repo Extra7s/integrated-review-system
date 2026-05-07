@@ -1,4 +1,26 @@
 <?php
+// Buffer all output so PHP warnings/notices don't corrupt JSON responses
+ob_start();
+
+ini_set('display_errors', '0');
+set_error_handler(function($severity, $message, $file, $line) {
+    throw new ErrorException($message, 0, $severity, $file, $line);
+});
+register_shutdown_function(function() {
+    $error = error_get_last();
+    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        if (!headers_sent()) {
+            header('Content-Type: application/json');
+        }
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'message' => 'A fatal error occurred while processing the review request.',
+            'error' => $error['message'] ?? 'Unknown fatal error'
+        ]);
+    }
+});
+
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -7,6 +29,8 @@ require_once "../config/review_api.php";
 require_once "../includes/review_analyzer.php";
 require_once "../config/review_token_service.php";
 
+// Discard any output from requires (warnings, notices etc.) and send clean JSON header
+ob_clean();
 header('Content-Type: application/json');
 
 $action = $_GET['action'] ?? $_POST['action'] ?? null;
@@ -21,34 +45,46 @@ if (!$is_logged_in && $action !== 'get') {
     exit;
 }
 
-switch ($action) {
-    case 'submit':
-        handleSubmitReview();
-        break;
-    
-    case 'get':
-        handleGetReviews();
-        break;
-    
-    case 'delete':
-        handleDeleteReview();
-        break;
-    
-    case 'update':
-        handleUpdateReview();
-        break;
-    
-    case 'helpful':
-        handleHelpful();
-        break;
-    
-    case 'checkCanReview':
-        handleCheckCanReview();
-        break;
-    
-    default:
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Invalid action']);
+try {
+    switch ($action) {
+        case 'submit':
+            handleSubmitReview();
+            break;
+        
+        case 'get':
+            handleGetReviews();
+            break;
+        
+        case 'delete':
+            handleDeleteReview();
+            break;
+        
+        case 'update':
+            handleUpdateReview();
+            break;
+        
+        case 'helpful':
+            handleHelpful();
+            break;
+        
+        case 'checkCanReview':
+            handleCheckCanReview();
+            break;
+        
+        default:
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Invalid action']);
+    }
+} catch (Throwable $e) {
+    if (!headers_sent()) {
+        header('Content-Type: application/json');
+    }
+    http_response_code(500);
+    echo json_encode([
+        'success' => false,
+        'message' => 'An unexpected error occurred while handling the request.',
+        'error' => $e->getMessage()
+    ]);
 }
 
 /**
@@ -97,11 +133,14 @@ function handleSubmitReview() {
     }
 
     // Check if user has purchased this artwork
+    // Accept orders that are paid (status='completed') OR paid (payment_status='paid') for backward compatibility
     $stmt = $conn->prepare("
         SELECT COUNT(*) as purchase_count 
         FROM order_items oi
         JOIN orders o ON oi.order_id = o.id
-        WHERE oi.artwork_id = ? AND o.user_id = ? AND o.status = 'completed' AND o.payment_status = 'paid'
+        WHERE oi.artwork_id = ? AND o.user_id = ? 
+          AND o.payment_status = 'paid'
+          AND o.status != 'cancelled'
     ");
     $stmt->bind_param("ii", $artwork_id, $user_id);
     $stmt->execute();
@@ -113,44 +152,65 @@ function handleSubmitReview() {
         return;
     }
 
-    // Check if user has a valid review token for this artwork (auto-lookup)
+    // Check if user has a valid review token for this artwork.
+    // If no token exists but the user has a verified purchase (checked above),
+    // auto-generate one — this covers purchases made before the token system was added.
     try {
         $tokenService = new ReviewTokenService($conn);
         
-        // Check if token exists for this user/artwork combo
         if (!$tokenService->hasValidToken($user_id, $artwork_id)) {
-            // Debug: check if any tokens exist for this user at all
-            $debug_stmt = $conn->prepare("SELECT COUNT(*) as token_count FROM review_tokens WHERE user_id = ?");
-            $debug_stmt->bind_param("i", $user_id);
-            $debug_stmt->execute();
-            $debug_result = $debug_stmt->get_result()->fetch_assoc();
+            error_log("No valid token for user $user_id, artwork $artwork_id. Auto-generating token because purchase is verified.");
             
-            error_log("No valid token for user $user_id, artwork $artwork_id. Total tokens for user: " . $debug_result['token_count']);
+            // Find the order_id for this user+artwork purchase (same conditions as purchase check above)
+            $order_stmt = $conn->prepare("
+                SELECT o.id as order_id
+                FROM orders o
+                JOIN order_items oi ON oi.order_id = o.id
+                WHERE oi.artwork_id = ? AND o.user_id = ?
+                  AND o.payment_status = 'paid'
+                  AND o.status != 'cancelled'
+                ORDER BY o.id DESC
+                LIMIT 1
+            ");
+            $order_stmt->bind_param("ii", $artwork_id, $user_id);
+            $order_stmt->execute();
+            $order_row = $order_stmt->get_result()->fetch_assoc();
             
-            http_response_code(403);
-            echo json_encode([
-                'success' => false, 
-                'message' => 'No valid review token found. Please ensure purchase was completed.',
-                'debug' => [
-                    'user_has_tokens' => $debug_result['token_count'] > 0,
-                    'user_id' => $user_id,
-                    'artwork_id' => $artwork_id
-                ]
-            ]);
-            return;
+            if ($order_row) {
+                // Generate a token directly for this user/artwork pair
+                $token_val = bin2hex(random_bytes(32));
+                $expires_at = date('Y-m-d H:i:s', strtotime('+365 days'));
+                $ins = $conn->prepare("
+                    INSERT INTO review_tokens (order_id, user_id, artwork_id, token, expires_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, NOW())
+                ");
+                $ins->bind_param("iiiss", $order_row['order_id'], $user_id, $artwork_id, $token_val, $expires_at);
+                if (!$ins->execute()) {
+                    error_log("Failed to auto-generate token: " . $ins->error);
+                    http_response_code(500);
+                    echo json_encode(['success' => false, 'message' => 'Could not create review token. Please contact support.']);
+                    return;
+                }
+                error_log("Auto-generated token for user $user_id, artwork $artwork_id");
+            } else {
+                // Should never reach here since purchase was already validated above
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Purchase verification mismatch. Please contact support.']);
+                return;
+            }
         }
         
-        // Get the actual token for consumption (we'll consume it after review creation)
+        // Get the token for consumption after review creation
         $tokenData = $tokenService->getValidToken($user_id, $artwork_id);
         if (!$tokenData) {
-            http_response_code(403);
-            echo json_encode(['success' => false, 'message' => 'Unable to retrieve review token']);
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'Unable to retrieve review token after generation.']);
             return;
         }
     } catch (Exception $e) {
         error_log("Token validation error: " . $e->getMessage());
         http_response_code(500);
-        echo json_encode(['success' => false, 'message' => 'Error validating token: ' . $e->getMessage()]);
+        echo json_encode(['success' => false, 'message' => 'Error processing review token: ' . $e->getMessage()]);
         return;
     }
 
@@ -175,6 +235,8 @@ function handleSubmitReview() {
 
     // Verified purchase is enforced above (completed + paid order)
     $verified_purchase = 1;
+    $status = 'pending';
+    $approved = 0;
 
     // Authenticity score is normalized to 0..1 where 1 = very authentic
     // - If model says Genuine with confidence c -> authenticity = c
@@ -195,9 +257,11 @@ function handleSubmitReview() {
             detection_algorithm,
             verified_purchase,
             is_authentic,
-            authenticity_score
+            authenticity_score,
+            status,
+            approved
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
     
     if (!$stmt) {
@@ -207,7 +271,7 @@ function handleSubmitReview() {
     }
     
     $stmt->bind_param(
-        "iiisidisiid",
+        "iiisidisiidsi",
         $artwork_id,
         $user_id,
         $rating,
@@ -218,7 +282,9 @@ function handleSubmitReview() {
         $algorithm,
         $verified_purchase,
         $is_authentic,
-        $authenticity_score
+        $authenticity_score,
+        $status,
+        $approved
     );
 
     if ($stmt->execute()) {
@@ -280,7 +346,7 @@ function handleGetReviews() {
     }
 
     // Get total count
-    $stmt = $conn->prepare("SELECT COUNT(*) as total FROM reviews WHERE artwork_id = ? AND approved = 1");
+    $stmt = $conn->prepare("SELECT COUNT(*) as total FROM reviews WHERE artwork_id = ? AND status != 'rejected'");
     $stmt->bind_param("i", $artwork_id);
     $stmt->execute();
     $total = $stmt->get_result()->fetch_assoc()['total'];
@@ -306,6 +372,7 @@ function handleGetReviews() {
                 r.verified_purchase,
                 r.is_authentic,
                 r.authenticity_score,
+                r.status,
                 r.created_at,
                 u.name as user_name,
                 hv.is_helpful as user_vote
@@ -313,7 +380,7 @@ function handleGetReviews() {
             JOIN users u ON r.user_id = u.id
             LEFT JOIN helpful_votes hv
                 ON hv.review_id = r.id AND hv.user_id = ?
-            WHERE r.artwork_id = ? AND r.approved = 1
+            WHERE r.artwork_id = ? AND r.status != 'rejected'
             ORDER BY r.created_at DESC
             LIMIT ? OFFSET ?
         ");
@@ -331,11 +398,12 @@ function handleGetReviews() {
                 r.verified_purchase,
                 r.is_authentic,
                 r.authenticity_score,
+                r.status,
                 r.created_at,
                 u.name as user_name
             FROM reviews r
             JOIN users u ON r.user_id = u.id
-            WHERE r.artwork_id = ? AND r.approved = 1
+            WHERE r.artwork_id = ? AND r.status != 'rejected'
             ORDER BY r.created_at DESC
             LIMIT ? OFFSET ?
         ");
@@ -352,46 +420,63 @@ function handleGetReviews() {
             $user_vote = intval($row['user_vote']); // 1 helpful, 0 unhelpful
         }
         $reviews[] = [
-            'id' => $row['id'],
-            'user_name' => htmlspecialchars($row['user_name']),
-            'rating' => intval($row['rating']),
-            'comment' => htmlspecialchars($row['comment']),
-            'is_fake' => boolval($row['is_fake']),
-            'fake_confidence' => floatval($row['fake_confidence']),
-            'helpful_count' => intval($row['helpful_count']),
-            'unhelpful_count' => intval($row['unhelpful_count'] ?? 0),
+            'id'                => $row['id'],
+            'user_name'         => htmlspecialchars($row['user_name']),
+            'rating'            => intval($row['rating']),
+            'comment'           => htmlspecialchars($row['comment']),
+            'is_fake'           => boolval($row['is_fake']),
+            'fake_confidence'   => floatval($row['fake_confidence']),
+            'helpful_count'     => intval($row['helpful_count']),
+            'unhelpful_count'   => intval($row['unhelpful_count'] ?? 0),
             'verified_purchase' => boolval($row['verified_purchase']),
-            'is_authentic' => boolval($row['is_authentic']),
-            'authenticity_score' => floatval($row['authenticity_score'] ?? 0),
-            'user_vote' => $user_vote,
-            'created_at' => $row['created_at']
+            'is_authentic'      => boolval($row['is_authentic']),
+            'authenticity_score'=> floatval($row['authenticity_score'] ?? 0),
+            'status'            => $row['status'],   // needed for flagged-badge logic in JS
+            'user_vote'         => $user_vote,
+            'created_at'        => $row['created_at']
         ];
     }
 
     // Calculate average rating and authenticity stats
+    // Use approved reviews for rating stats, but all visible reviews for other stats
     $stmt = $conn->prepare("SELECT AVG(rating) as avg_rating, COUNT(*) as count FROM reviews WHERE artwork_id = ? AND approved = 1");
     $stmt->bind_param("i", $artwork_id);
     $stmt->execute();
-    $stats = $stmt->get_result()->fetch_assoc();
-    
-    // Get authenticity breakdown
-    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM reviews WHERE artwork_id = ? AND approved = 1 AND is_authentic = 1");
+    $approved_stats = $stmt->get_result()->fetch_assoc();
+
+    // Get total visible reviews (same as pagination total)
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM reviews WHERE artwork_id = ? AND status != 'rejected'");
+    $stmt->bind_param("i", $artwork_id);
+    $stmt->execute();
+    $total_visible = $stmt->get_result()->fetch_assoc()['count'];
+
+    // Get authenticity breakdown (use all visible reviews)
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM reviews WHERE artwork_id = ? AND status != 'rejected' AND is_authentic = 1");
     $stmt->bind_param("i", $artwork_id);
     $stmt->execute();
     $authentic_count = $stmt->get_result()->fetch_assoc()['count'];
-    
-    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM reviews WHERE artwork_id = ? AND approved = 1 AND is_fake = 1");
+
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM reviews WHERE artwork_id = ? AND status != 'rejected' AND is_fake = 1");
     $stmt->bind_param("i", $artwork_id);
     $stmt->execute();
     $suspicious_count = $stmt->get_result()->fetch_assoc()['count'];
-    
-    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM reviews WHERE artwork_id = ? AND approved = 1 AND verified_purchase = 1");
+
+    // Also count reviews that have been flagged by risk analysis as suspicious
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM reviews WHERE artwork_id = ? AND status != 'rejected' AND status = 'flagged'");
+    $stmt->bind_param("i", $artwork_id);
+    $stmt->execute();
+    $flagged_count = $stmt->get_result()->fetch_assoc()['count'];
+
+    // Total suspicious = ML-detected fake + risk analysis flagged
+    $suspicious_count = $suspicious_count + $flagged_count;
+
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM reviews WHERE artwork_id = ? AND status != 'rejected' AND verified_purchase = 1");
     $stmt->bind_param("i", $artwork_id);
     $stmt->execute();
     $verified_count = $stmt->get_result()->fetch_assoc()['count'];
 
-    // compute average authenticity score (0.0-1.0)
-    $stmt = $conn->prepare("SELECT AVG(authenticity_score) as avg_authentic FROM reviews WHERE artwork_id = ? AND approved = 1");
+    // compute average authenticity score (0.0-1.0) from all visible reviews
+    $stmt = $conn->prepare("SELECT AVG(authenticity_score) as avg_authentic FROM reviews WHERE artwork_id = ? AND status != 'rejected'");
     $stmt->bind_param("i", $artwork_id);
     $stmt->execute();
     $avg_authentic = floatval($stmt->get_result()->fetch_assoc()['avg_authentic']);
@@ -406,8 +491,8 @@ function handleGetReviews() {
             'pages' => ceil($total / $limit)
         ],
         'stats' => [
-            'average_rating' => round(floatval($stats['avg_rating']), 1),
-            'total_reviews' => intval($stats['count']),
+            'average_rating' => round(floatval($approved_stats['avg_rating']), 1),
+            'total_reviews' => intval($total_visible),
             'authentic_reviews' => intval($authentic_count),
             'suspicious_reviews' => intval($suspicious_count),
             'verified_purchase_reviews' => intval($verified_count),
@@ -687,11 +772,14 @@ function handleCheckCanReview() {
     }
 
     // Check if user has purchased this artwork
+    // Accept paid orders with any non-cancelled status (covers older orders where status stayed 'pending')
     $stmt = $conn->prepare("
         SELECT COUNT(*) as purchase_count 
         FROM order_items oi
         JOIN orders o ON oi.order_id = o.id
-        WHERE oi.artwork_id = ? AND o.user_id = ? AND o.status = 'completed' AND o.payment_status = 'paid'
+        WHERE oi.artwork_id = ? AND o.user_id = ?
+          AND o.payment_status = 'paid'
+          AND o.status != 'cancelled'
     ");
     $stmt->bind_param("ii", $artwork_id, $user_id);
     $stmt->execute();
@@ -723,4 +811,4 @@ function handleCheckCanReview() {
         ]);
     }
 }
-?>
+

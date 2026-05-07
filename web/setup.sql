@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     detection_algorithm VARCHAR(50) DEFAULT 'ensemble',
     risk_score INT DEFAULT 0,
     risk_factors JSON,
-    status ENUM('approved', 'rejected', 'flagged', 'appealed', 'hidden') DEFAULT 'approved',
+    status ENUM('approved', 'rejected', 'flagged', 'appealed', 'hidden', 'pending') DEFAULT 'pending',
     flagged_reason VARCHAR(255),
     duplicate_hash VARCHAR(255),
     approved TINYINT DEFAULT 1,

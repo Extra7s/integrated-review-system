@@ -69,14 +69,43 @@ function handleGetReviews() {
     
     $offset = intval($_GET['offset'] ?? 0);
     $limit = intval($_GET['limit'] ?? 20);
+    $risk_filter = $_GET['risk_filter'] ?? '';
+    $status_filter = $_GET['status_filter'] ?? '';
+    
+    // Build WHERE clause
+    $where = [];
+    $params = [];
+    $types = '';
+    
+    if ($risk_filter) {
+        if ($risk_filter === 'high') {
+            $where[] = 'r.risk_score >= 70';
+        } elseif ($risk_filter === 'medium') {
+            $where[] = 'r.risk_score >= 40 AND r.risk_score < 70';
+        } elseif ($risk_filter === 'low') {
+            $where[] = 'r.risk_score < 40';
+        }
+    }
+    
+    if ($status_filter) {
+        $where[] = 'r.status = ?';
+        $params[] = $status_filter;
+        $types .= 's';
+    }
+    
+    $where_clause = $where ? 'WHERE ' . implode(' AND ', $where) : '';
     
     // Get total count
-    $stmt = $conn->prepare("SELECT COUNT(*) as total FROM reviews");
+    $count_query = "SELECT COUNT(*) as total FROM reviews r $where_clause";
+    $stmt = $conn->prepare($count_query);
+    if ($params) {
+        $stmt->bind_param($types, ...$params);
+    }
     $stmt->execute();
     $total = $stmt->get_result()->fetch_assoc()['total'];
     
     // Get reviews
-    $stmt = $conn->prepare("
+    $query = "
         SELECT 
             r.id, r.artwork_id, r.user_id, r.rating, r.comment,
             r.risk_score, r.risk_factors, r.status, r.created_at,
@@ -84,13 +113,19 @@ function handleGetReviews() {
         FROM reviews r
         JOIN users u ON r.user_id = u.id
         JOIN artworks a ON r.artwork_id = a.id
+        $where_clause
         ORDER BY r.risk_score DESC
         LIMIT ? OFFSET ?
-    ");
-    $stmt->bind_param("ii", $limit, $offset);
+    ";
+    $stmt = $conn->prepare($query);
+    $params[] = $limit;
+    $params[] = $offset;
+    $types .= 'ii';
+    $stmt->bind_param($types, ...$params);
     $stmt->execute();
+    $result = $stmt->get_result();
     $reviews = [];
-    while ($row = $stmt->get_result()->fetch_assoc()) {
+    while ($row = $result->fetch_assoc()) {
         $row['risk_factors'] = json_decode($row['risk_factors'], true);
         $reviews[] = $row;
     }
@@ -138,8 +173,9 @@ function handleGetFlaggedReviews() {
         LIMIT 100
     ");
     $stmt->execute();
+    $result = $stmt->get_result();
     $reviews = [];
-    while ($row = $stmt->get_result()->fetch_assoc()) {
+    while ($row = $result->fetch_assoc()) {
         $row['risk_factors'] = json_decode($row['risk_factors'], true);
         $reviews[] = $row;
     }

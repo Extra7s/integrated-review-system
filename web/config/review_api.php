@@ -45,11 +45,11 @@ class ReviewAPIService {
                 'recommendation' => $response['data']['recommendation'] ?? 'Review processed'
             );
         } else {
-            // If API is unavailable, return neutral result
+            // If API is unavailable, return neutral result with moderate confidence
             return array(
                 'success' => false,
                 'is_fake' => 0,
-                'confidence' => 0.00,
+                'confidence' => 0.50,  // Default to 50% confidence when API is offline
                 'result' => 'Unknown',
                 'algorithm' => 'offline',
                 'error' => $response['error'],
